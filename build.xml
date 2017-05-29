@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project name="update-jboss" default="start">
+    <taskdef resource="net/sf/antcontrib/antlib.xml" classpath="apache-ant-1.10.1/lib/ant-contrib.jar" onerror="ignore"/>
+
+    <scriptdef name="fix-fs-path" language="javascript">
+        <attribute name="path" />
+        <attribute name="property" />
+        path = attributes.get("path");
+        property = attributes.get("property");
+        project.setProperty(property, path.replace(/\\/g, "/"));
+    </scriptdef>
+
+    <!-- Определение каталога инсталляции, в зависимости от того какой именно файл был запущен -->
+    <if>
+        <isset property="ant.file.configuration"/>
+        <then>
+            <dirname property="ant.home.tmp" file="${ant.file.configuration}"/>
+        </then>
+        <else>
+            <property name="ant.home.tmp" value="./apache-ant-1.10.1"/>
+        </else>
+    </if>
+
+    <!-- Немного магии, чтобы у IDEA крышу не сносило -->
+    <property name="ant.home" value="./apache-ant-1.10.1"/>
+
+    <var name="ant.home" unset="true"/>
+    <fix-fs-path path="${ant.home.tmp}" property="ant.home"/>
+
+    <property name="install.home" location="${ant.home}/.."/>
+    <fix-fs-path path="${install.home}" property="install.home"/>
+
+    <!-- Базовые настройки -->
+    <property name="ant.path" value="${install.home}/apache-ant-1.10.1"/>
+    <property name="layers.path" value="${ant.path}/layers"/>
+
+    <var file="${install.home}/wildfly.properties" />
+
+    <macrodef name="jboss.modules.restore">
+        <sequential>
+            <echo message="Restore modules"/>
+            <for param="file">
+                <path>
+                    <fileset dir="${jboss.home}/modules" includes="**/module.xml"/>
+                </path>
+                <sequential>
+                    <if>
+                        <available file="@{file}.orig"/>
+                        <then>
+                            <copy file="@{file}.orig" tofile="@{file}" force="true" overwrite="true" quiet="true"/>
+                        </then>
+                    </if>
+                </sequential>
+            </for>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="jboss.modules.backup">
+        <sequential>
+            <echo message="Backup modules"/>
+            <for param="file">
+                <path>
+                    <fileset dir="${jboss.home}/modules" includes="**/module.xml"/>
+                </path>
+                <sequential>
+                    <if>
+                        <not>
+                            <available file="@{file}.orig"/>
+                        </not>
+                        <then>
+                            <copy file="@{file}" tofile="@{file}.orig" quiet="true"/>
+                        </then>
+                    </if>
+                </sequential>
+            </for>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="jboss.modules.exports">
+        <attribute name="exportsList"/>
+        <sequential>
+            <for list="@{exportsList}" param="export">
+                <sequential>
+                    <jboss.modules.export export="@{export}"/>
+                </sequential>
+            </for>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="jboss.modules.export">
+        <attribute name="export"/>
+        <sequential>
+            <for param="file">
+                <path>
+                    <fileset dir="${jboss.home}/modules" includes="**/module.xml"/>
+                </path>
+                <sequential>
+                    <copy file="@{file}" tofile="@{file}.tmp" force="true" overwrite="true" quiet="true"/>
+                    <xslt in="@{file}.tmp" out="@{file}" style="${install.home}/agents.xsl" force="true">
+                        <outputproperty name="method" value="xml"/>
+                        <outputproperty name="encoding" value="UTF-8"/>
+                        <outputproperty name="indent" value="yes"/>
+                        <param name="exportRes" expression="@{export}" type="STRING"/>
+                    </xslt>
+                </sequential>
+            </for>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="jboss.start">
+        <sequential>
+            <condition property="jboss.server.base.dir" value="${jboss.home}/standalone">
+                <not>
+                    <isset property="jboss.server.base.dir"/>
+                </not>
+            </condition>
+            <echo message="clean ${jboss.server.base.dir}/tmp directory"/>
+            <delete includeemptydirs="true" failonerror="false">
+                <fileset dir="${jboss.server.base.dir}/tmp/" includes="**/*"/>
+            </delete>
+            <delete includeemptydirs="true" failonerror="false">
+                <fileset dir="${jboss.server.base.dir}/deployments">
+                    <include name="*.dodeploy"/>
+                    <include name="*.isdeploying"/>
+                </fileset>
+            </delete>
+
+            <echo message="${jboss.home}/bin/standalone.sh -c standalone-full.xml"/>
+            <exec executable="${jboss.home}/bin/standalone.sh" spawn="no" taskname="wildfly" >
+                <env key="JAVA_OPTS" value="${agents.java.opts} ${jboss.java.opts}"/>
+                <arg value="-c"/>
+                <arg value="standalone-full.xml"/>
+            </exec>
+        </sequential>
+    </macrodef>
+
+    <target name="aprof.install">
+        <jboss.modules.backup/>
+        <jboss.modules.restore/>
+        <echo message="Install java agent: aprof" />
+        <unjar src="${install.home}/aprof.jar" dest="${install.home}/lib">
+            <patternset>
+                <include name="*.jar"/>
+            </patternset>
+        </unjar>
+        <if>
+            <os family="windows" />
+            <then>
+                <var name="jvm.boot.classpath.separator" value=";"/>
+            </then>
+            <else>
+                <var name="jvm.boot.classpath.separator" value=":"/>
+            </else>
+        </if>
+        <var name="jvm.boot.classpath" value="-Xbootclasspath/a:"/>
+        <var name="-jvm.boot.classpath" value="${jvm.boot.classpath}"/>
+        <for param="file">
+            <path>
+                <fileset dir="${install.home}/lib" includes="*.jar"/>
+            </path>
+            <sequential>
+                <if>
+                    <matches pattern=".*\.jar$" string="${-jvm.boot.classpath}"/>
+                    <then>
+                        <var name="jvm.boot.classpath" value="${-jvm.boot.classpath}${jvm.boot.classpath.separator}@{file}"/>
+                    </then>
+                    <else>
+                        <var name="jvm.boot.classpath" value="${-jvm.boot.classpath}@{file}"/>
+                    </else>
+                </if>
+                <var name="-jvm.boot.classpath" value="${jvm.boot.classpath}"/>
+            </sequential>
+        </for>
+        <var name="agents.java.opts" value="${jvm.boot.classpath} -javaagent:${install.home}/aprof.jar"/>
+        <jboss.modules.exports exportsList="${agents.aprof.exports}"/>
+    </target>
+
+    <target name="start" depends="aprof.install">
+        <jboss.start/>
+    </target>
+
+    <target name="restore.modules">
+        <for param="file">
+            <path>
+                <fileset dir="${jboss.home}/modules" includes="**/module.xml"/>
+            </path>
+            <sequential>
+                <echo message="@{file}"/>
+                <copy file="@{file}.orig" tofile="@{file}" force="true"/>
+            </sequential>
+        </for>
+    </target>
+</project>

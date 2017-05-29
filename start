@@ -1,0 +1,23 @@
+#! /bin/sh
+
+## resolve links - $0 may be a link to ant's home
+PRG="$0"
+
+# need this for relative symlinks
+while [ -h "$PRG" ] ; do
+  ls=`ls -ld "$PRG"`
+  link=`expr "$ls" : '.*-> \(.*\)$'`
+  if expr "$link" : '/.*' > /dev/null; then
+    PRG="$link"
+  else
+    PRG=`dirname "$PRG"`"/$link"
+  fi
+done
+
+ANT_HOME=`dirname "$PRG"`/apache-ant-1.10.1
+
+# make it fully qualified
+ANT_HOME=`cd "$ANT_HOME" > /dev/null && pwd`
+ANT_OPTS=-Dfile.encoding=UTF-8
+
+$ANT_HOME/bin/ant -buildfile $ANT_HOME/../build.xml $@
